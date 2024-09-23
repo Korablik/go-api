@@ -1,9 +1,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/sirupsen/logrus"
 )
@@ -20,6 +25,8 @@ func helloHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
+	port := 5000
+
 	log := logrus.New()
 	log.SetFormatter(&logrus.TextFormatter{
 		FullTimestamp: true,
@@ -27,12 +34,47 @@ func main() {
 
 	log.Info("Starting the application...")
 
-	http.HandleFunc("/hello-world", helloHandler)
-
-	err := http.ListenAndServe(":5000", nil)
-	if err != nil {
-		log.Fatalf("Error starting server: %v", err)
+	// Create a new HTTP server
+	server := &http.Server{
+		Addr:    fmt.Sprintf(":%v", port),
+		Handler: http.HandlerFunc(helloHandler),
 	}
 
-	log.Info("Application finished.")
+	// Channel to notify the main routine of server shutdown
+	done := make(chan bool, 1)
+
+	go signHandler(server, done, log)
+
+	// Start the server
+	log.Infof("Starting server on port: %v", port)
+	if err := server.ListenAndServe(); err != http.ErrServerClosed {
+		log.Errorf("Could not start server: %v", err)
+	}
+
+	// Wait for the server to gracefully shutdown
+	<-done
+	log.Info("Server STOPPED")
+	os.Exit(0)
+}
+
+// Goroutine to handle signal
+func signHandler(server *http.Server, done chan bool, log *logrus.Logger) {
+	// Channel to listen for interrupt or terminate signals
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	// Wait for an interrupt or terminate signal
+	sig := <-sigChan
+
+	log.Infof("Received signal: %s, shutting down server...", sig)
+	// Create a deadline for the shutdown
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Attempt graceful shutdown
+	if err := server.Shutdown(ctx); err != nil {
+		log.Errorf("Server forced to shutdown: %v", err)
+	}
+
+	close(done)
 }
