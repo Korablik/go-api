@@ -10,29 +10,30 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/sirupsen/logrus"
+	"go.uber.org/zap"
+)
+
+const (
+	//TODO: move to config file
+	port = 5000
 )
 
 // Handler function for the "/hello" endpoint
 func helloHandler(w http.ResponseWriter, r *http.Request) {
-	// Log the request
 	log.Println("Request:", r.Method, r.URL.Path)
 
-	// Respond with "Hello, World!"
 	w.WriteHeader(http.StatusOK)
+
 	fmt.Fprintf(w, "Hello, World!")
 	log.Println("Response: 'Hello, World'")
 }
 
 func main() {
-	port := 5000
+	// init logger
+	logger, _ := zap.NewProduction()
+	defer logger.Sync()
 
-	log := logrus.New()
-	log.SetFormatter(&logrus.TextFormatter{
-		FullTimestamp: true,
-	})
-
-	log.Info("Starting the application...")
+	logger.Info("Starting the application")
 
 	// Create a new HTTP server
 	server := &http.Server{
@@ -43,22 +44,23 @@ func main() {
 	// Channel to notify the main routine of server shutdown
 	done := make(chan bool, 1)
 
-	go signHandler(server, done, log)
+	go signHandler(server, done, logger)
 
 	// Start the server
-	log.Infof("Starting server on port: %v", port)
+	logger.Info("Starting server", zap.Int("port", port))
 	if err := server.ListenAndServe(); err != http.ErrServerClosed {
-		log.Errorf("Could not start server: %v", err)
+		logger.Error("Could not start server", zap.Error(err))
 	}
 
 	// Wait for the server to gracefully shutdown
 	<-done
-	log.Info("Server STOPPED")
+
+	logger.Info("Server STOPPED")
 	os.Exit(0)
 }
 
 // Goroutine to handle signal
-func signHandler(server *http.Server, done chan bool, log *logrus.Logger) {
+func signHandler(server *http.Server, done chan bool, logger *zap.Logger) {
 	// Channel to listen for interrupt or terminate signals
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
@@ -66,14 +68,14 @@ func signHandler(server *http.Server, done chan bool, log *logrus.Logger) {
 	// Wait for an interrupt or terminate signal
 	sig := <-sigChan
 
-	log.Infof("Received signal: %s, shutting down server...", sig)
+	logger.Info("Received signal. Shutting down server...", zap.String("signal", sig.String()))
 	// Create a deadline for the shutdown
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	// Attempt graceful shutdown
 	if err := server.Shutdown(ctx); err != nil {
-		log.Errorf("Server forced to shutdown: %v", err)
+		logger.Error("Server forced to shutdown: %v", zap.Error(err))
 	}
 
 	close(done)
